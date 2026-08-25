@@ -1,0 +1,49 @@
+name: HKID slot watch
+
+on:
+  schedule:
+    # Every 5 minutes -- GitHub's floor, and about right: the upstream feed only
+    # regenerates every ~15 min, so polling faster would learn nothing new.
+    #
+    # Cron is UTC; Hong Kong is UTC+8. Hours 23,0-16 UTC = 07:00-01:00 HKT, so
+    # this skips 01:00-07:00 HKT, when nobody is cancelling appointments. That
+    # is ~25% fewer requests, and the runner never even starts.
+    #
+    # Relies on this repo being PUBLIC (unlimited Actions minutes). If it ever
+    # goes private, drop to */30 or the 2000-min free tier runs out in a week
+    # and the schedule stops silently.
+    # Ticks are best-effort and can be delayed or dropped under load.
+    - cron: "*/5 23,0-16 * * *"
+  workflow_dispatch:
+    inputs:
+      test_push:
+        description: "Send a test notification even if nothing qualifies"
+        type: boolean
+        default: false
+
+concurrency:
+  group: hkid-watch
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      # Carry state.json across runs so an already-reported slot is not re-pushed.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            state.json
+            history.db
+          key: hkid-state-${{ github.run_id }}
+          restore-keys: hkid-state-
+
+      - run: python3 check.py ${{ inputs.test_push && '--test' || '' }}
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TARGET_DATE: ${{ secrets.TARGET_DATE }}
+          TARGET_TIME: ${{ secrets.TARGET_TIME }}
+          HEALTHCHECK_URL: ${{ secrets.HEALTHCHECK_URL }}
