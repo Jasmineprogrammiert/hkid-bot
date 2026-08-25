@@ -1,0 +1,11 @@
+{
+  "target_date": "",
+  "target_time": "",
+  "offices": ["RHK", "RKO", "RTK", "FTO", "TMO", "YLO"],
+  "include_almost_full": true,
+  "include_target_day": true,
+  "heartbeat_hours": 8,
+  "ntfy_topic": "",
+  "healthcheck_url": "",
+  "ntfy_server": "https://ntfy.sh"
+}
