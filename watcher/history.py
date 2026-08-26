@@ -20,6 +20,7 @@ must not be able to take it down."""
 
 import sqlite3
 import sys
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -126,3 +127,87 @@ def record(feed):
     except (sqlite3.Error, KeyError, ValueError, TypeError, OSError) as exc:
         print(f"[warn] history not recorded: {exc}", file=sys.stderr)
         return 0
+
+OPEN = ("quota-g", "quota-y")
+FULL_ = "quota-r"
+
+
+def _events(conn):
+    """Transitions worth reporting, with the feed's own time parsed."""
+    rows = conn.execute(
+        "SELECT office_id, slot_date, from_status, to_status, feed_stamp FROM transition"
+        " WHERE from_status IS NOT NULL ORDER BY id")
+    out = []
+    for office, day, was, now_, stamp in rows:
+        try:
+            at = datetime.strptime(stamp, "%m/%d/%Y %H:%M:%S")
+        except ValueError:
+            continue
+        if was == FULL_ and now_ in OPEN:
+            out.append((at, office, day, "opened"))
+        elif was in OPEN and now_ == FULL_:
+            out.append((at, office, day, "taken"))
+    return out
+
+
+def _survivals(events):
+    """Minutes between a slot opening and the same slot being taken."""
+    opened, spans = {}, []
+    for at, office, day, kind in events:
+        key = (office, day)
+        if kind == "opened":
+            opened[key] = at
+        elif kind == "taken" and key in opened:
+            spans.append((at - opened.pop(key)).total_seconds() / 60)
+    return spans
+
+
+def report():
+    """When openings appear, and how long they last. Returns False if no data."""
+    if not DB.exists():
+        print("no history yet - the database is written on the first run")
+        return False
+    conn = connect()
+    try:
+        events = _events(conn)
+        total = conn.execute("SELECT count(*) FROM transition").fetchone()[0]
+    finally:
+        conn.close()
+
+    opens = [e for e in events if e[3] == "opened"]
+    print(f"transitions recorded : {total}")
+    print(f"openings seen        : {len(opens)}")
+    if not opens:
+        print("\nNothing has opened yet. Come back once the feed has shown a red -> green.")
+        return False
+
+    print(f"first               : {opens[0][0]:%a %d %b %H:%M}")
+    print(f"latest              : {opens[-1][0]:%a %d %b %H:%M}")
+
+    print("\nopenings by hour (feed's own clock)")
+    by_hour = Counter(e[0].hour for e in opens)
+    peak = max(by_hour.values())
+    for h in range(24):
+        n = by_hour.get(h, 0)
+        if n or 7 <= h <= 23:
+            print(f"  {h:02d}:00  {'#' * int(12 * n / peak) if n else ''}{'' if n else '.'} {n or ''}")
+
+    print("\nopenings by weekday")
+    names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    by_day = Counter(e[0].weekday() for e in opens)
+    peak = max(by_day.values())
+    for d in range(7):
+        n = by_day.get(d, 0)
+        print(f"  {names[d]}  {'#' * int(12 * n / peak) if n else '.'} {n or ''}")
+
+    spans = _survivals(events)
+    print("\nhow long an opening lasted before it was taken")
+    if not spans:
+        print("  no opening has been taken yet - none have closed since appearing")
+    else:
+        spans.sort()
+        mid = spans[len(spans) // 2]
+        print(f"  median {mid:.0f} min   (min {min(spans):.0f}, max {max(spans):.0f}, n={len(spans)})")
+        print(f"  under 15 min: {sum(1 for s in spans if s < 15)} of {len(spans)}"
+              "  <- these are the ones a 15-minute feed can never show in time")
+    return True

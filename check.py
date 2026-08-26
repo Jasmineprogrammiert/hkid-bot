@@ -15,6 +15,7 @@ from watcher.alerts import describe, headline, notify
 from watcher.config import load_config
 from watcher.feed import BackOff, fetch, find_openings
 from watcher.history import record as record_history
+from watcher.history import report as history_report
 from watcher.monitor import (
     check_heartbeat,
     in_cooldown,
@@ -69,6 +70,10 @@ def send_alert(cfg, fresh, force, booked):
 
 
 def main():
+    # Reporting reads the collected history and makes no network request.
+    if "--report" in sys.argv:
+        return 0 if history_report() else 1
+
     force = "--test" in sys.argv
     cfg = load_config()
     state = load_state()
