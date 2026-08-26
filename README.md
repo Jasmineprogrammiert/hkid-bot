@@ -46,10 +46,15 @@ only notifies when something actually opens up.
 
 ## Running it 24/7
 
-`.github/workflows/watch.yml` runs the check on GitHub's servers every 5 minutes, so your
-machine doesn't need to be on. Add the same values as repository secrets under
+`.github/workflows/watch.yml` runs the check on GitHub's servers, so your machine doesn't
+need to be on. Add the same values as repository secrets under
 Settings → Secrets and variables → Actions — `TARGET_DATE` and `NTFY_TOPIC` are required,
 `TARGET_TIME` and `HEALTHCHECK_URL` optional.
+
+**The 5-minute cadence comes from a loop inside the job, not from the cron.** GitHub
+documents that scheduled runs are dropped under load; measured here, a `*/5` schedule
+delivered one dispatch every 35–47 minutes. So each dispatch polls for ~50 minutes itself,
+and the concurrency group queues overlapping dispatches into continuous coverage.
 
 Keep the repo **public**; a private one can't sustain 5-minute polling
 ([why](#when-something-breaks)).

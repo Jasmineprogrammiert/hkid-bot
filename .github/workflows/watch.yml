@@ -28,12 +28,15 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Each run polls for ~50 min rather than exiting immediately, so the cadence
+    # comes from this job rather than from GitHub's scheduler -- which drops most
+    # */5 ticks under load and delivers roughly one dispatch an hour.
+    timeout-minutes: 55
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Carry state.json across runs so an already-reported slot is not re-pushed.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             state.json
@@ -41,7 +44,25 @@ jobs:
           key: hkid-state-${{ github.run_id }}
           restore-keys: hkid-state-
 
-      - run: python3 check.py ${{ inputs.test_push && '--test' || '' }}
+      - name: Watch for openings
+        run: |
+          set -u
+          deadline=$(( $(date +%s) + 50*60 ))
+          first=1
+          while :; do
+            # A --test push is a one-off, not something to repeat every 5 min.
+            if [ "$first" = 1 ]; then
+              python3 check.py ${{ inputs.test_push && '--test' || '' }} || true
+              first=0
+            else
+              python3 check.py || true
+            fi
+            hour=$(date -u +%H)
+            # Stop at the deadline, or on entering the 01:00-07:00 HKT quiet window.
+            if [ "$(date +%s)" -ge "$deadline" ]; then break; fi
+            if [ "$hour" -ge 17 ] && [ "$hour" -le 22 ]; then break; fi
+            sleep 300
+          done
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           TARGET_DATE: ${{ secrets.TARGET_DATE }}
