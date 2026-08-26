@@ -6,10 +6,6 @@ the date you already booked.
 The data comes from the Immigration Department's public [Appointment Quota Preview][preview].
 Booking is still manual — this just tells you when it's worth going to do it.
 
-**One limit worth knowing up front:** the feed is day-level only. It can tell you a day has
-opened up, but not which times are free — so it can't tell you whether that slot beats your
-existing one on the same day.
-
 [preview]: https://eservices.es2.immd.gov.hk/es/quota-enquiry-client/?l=en-US&appId=579
 
 ## Setup
@@ -60,7 +56,7 @@ Keep the repo **public**; a private one can't sustain 5-minute polling
 ([why](#when-something-breaks)).
 
 Nothing runs between **01:00 and 07:00 HKT**, when most people are asleep and changes are
-less likely — 216 runs a day instead of 288. Cron works in UTC, so that window is `23,0-16`.
+less likely — 216 checks a day instead of 288. Cron works in UTC, so that window is `23,0-16`.
 
 Any always-on machine works too, as a crontab entry:
 
@@ -103,24 +99,18 @@ every 5 min, 07:00-01:00 HKT
       |
       v
   state.json    reported slots + feed timestamps, read again next run
+  history.db    every change the feed has shown, kept for good
 ```
 
-```
-check.py           the run itself - entry point
-config.json        preferences
-watcher/
-  config.py        settings, from .env and the environment
-  feed.py          reading the quota feed, comparing it to your booking
-  alerts.py        formatting an opening and pushing it to your phone
-  state.py         what carries between runs
-  monitor.py       noticing when the watcher itself is broken
-```
+`check.py` is the entry point; the parts live in `watcher/` — `config` (settings), `feed`
+(reading and filtering), `alerts` (ntfy), `state` (what carries between runs), `history`
+(recording changes), `monitor` (noticing when the watcher itself is broken). Dependencies
+point one way only: the first three import nothing local, `alerts` uses `feed`, `monitor`
+sits on `alerts` and `state`, and `check.py` wires them together.
 
-Dependencies point one way only — `config`, `feed` and `state` import nothing local;
-`alerts` uses `feed`; `monitor` sits on `alerts` and `state`; `check.py` wires them up.
-
-**Freshness.** The feed regenerates about every 15 minutes; this checks every 5. You don't
-have to take that on trust — every run logs the feed's own `lastUpdateTime`:
+**Freshness.** The feed regenerates every 15 minutes — `refreshTime = 9e5` in the page's own
+script, and measured at a median of 15.0 min. This checks every 5. Every run logs the feed's
+own `lastUpdateTime`, so you can re-check that:
 
 ```sh
 python3 check.py --stats
@@ -130,18 +120,58 @@ python3 check.py --stats
 observations recorded : 84
 distinct publications : 29
 refresh interval      : median 15.0 min (min 14.9, max 16.0, n=28)
+first seen            : 08/25/2026 10:02:14
+latest                : 08/26/2026 09:47:31
 ```
 
-If that median moves, the poll interval should move with it.
+Gaps under two minutes are ignored — the feed sits behind a load balancer whose nodes publish
+a second or two apart, so one publication can surface twice with different timestamps.
 
-Gaps under two minutes are ignored: the feed sits behind a load balancer whose nodes
-publish a second or two apart, so one publication can show up twice with different
-timestamps.
+**History.** Alerting asks only what's open now and discards the rest. `history.db` keeps
+what can't be recovered later: when each cell changed. Transitions, not snapshots —
+`red → green` a cancellation appearing, `green → red` someone taking it, `→ gone` a date
+leaving the rolling window rather than being booked. Every office is stored, timed by the
+feed's own clock. Failures warn and return zero, so collection can't break the alerting it
+rides on.
+
+## What this can't do
+
+Two limits, both structural.
+
+**It's day-level.** The feed gives a status per office per day, never individual times — so
+it can't tell you whether an opening on your booked day beats the time you hold.
+
+**It's 15 minutes behind.** That's Immigration's republish interval, not a setting here;
+polling faster returns byte-identical data. So **a slot that opens and is taken inside one
+cycle never appears at all** — the feed shows full before and full after, and no transition
+is ever published. How big that blind spot is depends on how fast freed slots go, which is
+what `--report` measures:
+
+```sh
+python3 check.py --report
+```
+
+It shows when openings appear, by hour and weekday, and how long each survived — including
+how many lasted under 15 minutes and so were never visible here.
+
+The authoritative view lives inside the booking system, which computes availability per
+applicant — so the answer depends on who is asking, can't be shared, and can't be cached.
+That path sits behind a queue gate and client attestation, and this stays out of it
+deliberately: the gate exists to keep automated clients out, and tripping it risks the
+appointment you already hold.
+
+What the department publishes openly instead is a batch-computed summary, identical for every
+visitor and cheap to serve, so casual reads never touch the booking database. The 15 minutes
+is the price of that separation rather than an oversight.
+
+Openings that outlast a cycle are still caught, and the report can point you at the hours
+worth checking by hand — but this won't win a race against someone already inside the
+booking system.
 
 ## When something breaks
 
-Silence normally means "no slots". Without the layers below it would equally mean "this
-broke three weeks ago" — indistinguishable from your phone.
+Silence normally means "no slots". Without the layers below it would equally mean "this broke
+three weeks ago", and from your phone the two look identical.
 
 ```
 Immigration rejects us     ->  back off quietly, doubling each time
@@ -151,28 +181,26 @@ stops running entirely     ->  no ping      ->  healthchecks.io emails you
 ```
 
 Each layer covers the blind spot of the one above. The last matters most: if the workflow is
-disabled or out of Actions minutes, no code here runs, so nothing here could report it. Only
-an outside watcher notices the silence.
+disabled or out of minutes, no code here runs, so only an outside watcher can notice.
 
-**The 8-hour heartbeat** clears the largest legitimate gap — six quiet overnight hours plus
+**The 8-hour heartbeat** clears the largest legitimate gap — the quiet overnight hours plus
 cron drift — while still reaching you the same day. It fires once per outage, not once per
-run, and re-arms after the next successful check. "Succeeded" means usable data, not merely
-an HTTP 200: if the feed answered but its shape had changed, counting that as success would
-keep resetting the clock and the heartbeat could never fire.
+run. "Succeeded" means usable data, not an HTTP 200: counting a changed schema as success
+would keep resetting the clock, and the heartbeat could never fire.
 
 **The dead-man's switch** is optional. Create a free check at
 [healthchecks.io](https://healthchecks.io), set **Period 8 hours, Grace 1 hour**, and add its
-ping URL as a `HEALTHCHECK_URL` secret. Treat that URL as a password — anyone holding it can
-fake a heartbeat and suppress a real alert.
+ping URL as a `HEALTHCHECK_URL` secret. Treat it as a password — anyone holding it can fake a
+heartbeat.
 
-A single failed check stays silent on purpose; only three in a row report. One flaky network
-moment shouldn't page you, and an alert you learn to ignore is worse than none.
+One failed check stays silent; only three in a row report. An alert you learn to ignore is
+worse than none.
 
-**Two ways the schedule can stop without telling you:**
+**Two ways the schedule can stop silently:**
 
 | | What happens | Fix |
 |---|---|---|
-| **Actions minutes** | Private repos get 2,000/month, and GitHub rounds every run up to a full minute. 5-minute polling spends the lot in about a week. | Keep the repo public, or drop the cron to `*/30` |
+| **Actions minutes** | Private repos get 2,000/month. Because each job now polls for ~50 minutes, that allowance is gone in under two days. | Keep the repo public, or drop the loop and the cron to `*/30` |
 | **Inactivity** | GitHub disables scheduled workflows after 60 days without repo activity. | Any commit resets the clock |
 
 ## Notes
@@ -181,10 +209,9 @@ moment shouldn't page you, and an alert you learn to ignore is worse than none.
 slot that fills and later reopens *will* alert again — that's wanted. If a push fails,
 nothing is recorded, so the next run retries instead of losing the alert.
 
-**Load on the government server.** Each run is one request, about 58 KB, no browser. The
-endpoint sends no `ETag` or `Last-Modified`, so every check pays full price, and publishes no
-rate limits to aim at. Rather than probe for where the line is, the script sends one request
-per run, **never retries a rejection**, and on `429`, `403` or `503` sleeps at least an hour
-— honouring `Retry-After`, doubling on repeats, capped at a day.
+**Load on the government server.** One request per check, ~58 KB, no browser. The endpoint
+sends no `ETag` and publishes no rate limits, so rather than probe for the line the script
+**never retries a rejection**: on `429`, `403` or `503` it sleeps at least an hour, honouring
+`Retry-After`, doubling on repeats, capped at a day.
 
 > Retrying through a throttle is what turns a temporary slowdown into a lasting block.
