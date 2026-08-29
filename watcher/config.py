@@ -5,6 +5,7 @@ environment or a gitignored .env, never from the repo, so this can stay public."
 
 import json
 import os
+from datetime import date
 from pathlib import Path
 
 # Data files live at the repo root, one level above this package.
@@ -46,4 +47,31 @@ def load_config():
             "No target date set. Export TARGET_DATE=YYYY-MM-DD (the appointment you\n"
             "already hold); anything earlier than it will trigger an alert."
         )
+    validate(cfg)
     return cfg
+
+
+# What find_openings() indexes directly, and the type each has to be.
+EXPECTED = (("offices", list), ("include_almost_full", bool), ("include_target_day", bool))
+
+
+def validate(cfg):
+    """Fail here, naming the key, rather than four frames deeper.
+
+    find_openings() indexes these straight off the config. A missing or
+    mistyped one surfaced there as a KeyError or ValueError, which check.py
+    reports as 'schema may have changed' -- blaming Immigration for a typo in
+    a local file. Checking at load keeps that message honest.
+    """
+    for key, kind in EXPECTED:
+        if key not in cfg:
+            raise SystemExit(f"config.json is missing {key!r}.")
+        if not isinstance(cfg[key], kind):
+            raise SystemExit(f"config.json: {key!r} should be a {kind.__name__}, "
+                             f"not a {type(cfg[key]).__name__}.")
+    if not cfg["offices"]:
+        raise SystemExit("config.json: 'offices' is empty, so nothing can ever match.")
+    try:
+        date.fromisoformat(cfg["target_date"])
+    except (ValueError, TypeError):
+        raise SystemExit(f"target date {cfg['target_date']!r} is not YYYY-MM-DD.") from None

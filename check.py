@@ -95,6 +95,8 @@ def main():
         # Parsed as JSON but isn't the shape we expect -- most likely IMMD
         # changed the schema. Treat it as a failure so a broken watcher backs
         # off and shows up in the logs, rather than crashing every 5 minutes.
+        # Config is validated at load, so a local typo can no longer arrive
+        # here wearing Immigration's clothes.
         record_failure(cfg, state,
                        f"unexpected feed format ({exc}) - schema may have changed")
         check_heartbeat(cfg, state)
