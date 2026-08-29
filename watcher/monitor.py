@@ -39,12 +39,17 @@ def ping_healthcheck(cfg, ok=True):
         print(f"[warn] healthcheck ping failed: {exc}", file=sys.stderr)
 
 
-def check_heartbeat(cfg, state):
+def check_heartbeat(cfg, state, paused_until=None):
     """Warn if it has been too long since a successful read.
 
     Silence is the normal state of this tool, which means a dead watcher looks
     exactly like a quiet one. This is the only thing that tells them apart.
     Alerts once per outage; a successful read re-arms it.
+
+    A deliberate back-off still counts. Nothing is checked while one lasts, and
+    at full escalation that is a 24-hour blind window -- so it is worth hearing
+    about, just not under the words "may be broken". Pass paused_until to say
+    what is actually happening.
     """
     hours = cfg.get("heartbeat_hours", 8)
     if not hours:
@@ -57,15 +62,19 @@ def check_heartbeat(cfg, state):
         return
 
     since = parse(last).strftime("%a %d %b, %H:%M")
-    notify(
-        cfg,
-        "HKID watcher may be broken",
-        f"No successful check since {since} "
-        f"({int(stale_for.total_seconds() // 3600)}h ago).\n\n"
-        "Slots could be opening without you hearing about it. "
-        "Worth looking at the GitHub Actions tab.",
-        priority="high",
-    )
+    stale_hours = int(stale_for.total_seconds() // 3600)
+    if paused_until:
+        title = "HKID watcher paused"
+        body = (f"Backing off until {parse(paused_until):%a %d %b, %H:%M} - the "
+                f"server asked us to slow down.\n\n"
+                f"Nothing has been checked since {since} ({stale_hours}h ago), "
+                "and nothing will be until the pause ends.")
+    else:
+        title = "HKID watcher may be broken"
+        body = (f"No successful check since {since} ({stale_hours}h ago).\n\n"
+                "Slots could be opening without you hearing about it. "
+                "Worth looking at the GitHub Actions tab.")
+    notify(cfg, title, body, priority="high")
     state["heartbeat_sent"] = True
     print(f"[warn] heartbeat: no success for {stale_for}", file=sys.stderr)
 

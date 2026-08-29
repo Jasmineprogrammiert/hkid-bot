@@ -81,7 +81,9 @@ def main():
     if in_cooldown(state):
         print(f"[hold] backing off until {state['cooldown_until']} "
               "- server asked us to slow down")
-        check_heartbeat(cfg, state)
+        # Deliberate, so it gets its own words -- but still reported, because
+        # nothing is being checked for as long as it lasts.
+        check_heartbeat(cfg, state, paused_until=state["cooldown_until"])
         save_state(state, set(state["seen"]), None)
         return 0
 
