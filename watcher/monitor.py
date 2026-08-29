@@ -6,11 +6,11 @@ stopped working weeks ago', and the two are indistinguishable from a phone."""
 import sys
 import urllib.error
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from .alerts import notify
 from .feed import COOLDOWN_MIN_S
-from .state import save_state
+from .state import now, parse, save_state
 
 COOLDOWN_MAX_S = 86400
 # Consecutive unexplained failures before we assume it's us, not them.
@@ -52,11 +52,11 @@ def check_heartbeat(cfg, state):
     last = state.get("last_success")
     if not last:
         return                                  # nothing to compare against yet
-    stale_for = datetime.now() - datetime.fromisoformat(last)
+    stale_for = now() - parse(last)
     if stale_for < timedelta(hours=hours) or state.get("heartbeat_sent"):
         return
 
-    since = datetime.fromisoformat(last).strftime("%a %d %b, %H:%M")
+    since = parse(last).strftime("%a %d %b, %H:%M")
     notify(
         cfg,
         "HKID watcher may be broken",
@@ -73,13 +73,13 @@ def check_heartbeat(cfg, state):
 def in_cooldown(state):
     """True while we have promised to leave the server alone."""
     resume = state.get("cooldown_until")
-    return bool(resume and datetime.now() < datetime.fromisoformat(resume))
+    return bool(resume and now() < parse(resume))
 
 
 def start_cooldown(cfg, state, floor_s, reason):
     """Stop making requests for a while, escalating if it keeps happening."""
     wait = min(max(floor_s, state.get("cooldown_len", 0) * 2), COOLDOWN_MAX_S)
-    resume_at = datetime.now() + timedelta(seconds=wait)
+    resume_at = now() + timedelta(seconds=wait)
     state["cooldown_until"] = resume_at.isoformat(timespec="seconds")
     state["cooldown_len"] = wait
     print(f"[hold] {reason} - pausing {wait // 60} min", file=sys.stderr)
@@ -91,7 +91,7 @@ def mark_success(state):
     state["cooldown_until"] = None
     state["cooldown_len"] = 0
     state["fail_streak"] = 0
-    state["last_success"] = datetime.now().isoformat(timespec="seconds")
+    state["last_success"] = now().isoformat(timespec="seconds")
     state["heartbeat_sent"] = False
 
 
