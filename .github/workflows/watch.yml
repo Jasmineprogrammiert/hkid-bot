@@ -5,15 +5,21 @@ on:
     # Every 5 minutes -- GitHub's floor, and about right: the upstream feed only
     # regenerates every ~15 min, so polling faster would learn nothing new.
     #
-    # Cron is UTC; Hong Kong is UTC+8. Hours 23,0-16 UTC = 07:00-01:00 HKT, so
-    # this skips 01:00-07:00 HKT, when nobody is cancelling appointments. That
-    # is ~25% fewer requests, and the runner never even starts.
+    # Round the clock, deliberately. An 01:00-07:00 HKT quiet window saved ~25%
+    # of requests but cost far more than it saved: it ended the running job every
+    # night, and coverage could only restart when GitHub sent the next dispatch.
+    # On 27 and 29 Aug that took 5 hours, so nothing was watched until midday
+    # HKT. Polling continuously is what keeps coverage from depending on the
+    # scheduler's mood.
     #
     # Relies on this repo being PUBLIC (unlimited Actions minutes). If it ever
     # goes private, drop to */30 or the 2000-min free tier runs out in a week
     # and the schedule stops silently.
-    # Ticks are best-effort and can be delayed or dropped under load.
-    - cron: "*/5 23,0-16 * * *"
+    # Ticks are best-effort and can be delayed or dropped under load -- badly:
+    # they arrived every 30-60 min while the repo was being pushed to, then fell
+    # to one per ~8h once it went quiet. The job length below, not this cron, is
+    # what actually determines coverage.
+    - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
       test_push:
@@ -28,10 +34,14 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    # Each run polls for ~50 min rather than exiting immediately, so the cadence
-    # comes from this job rather than from GitHub's scheduler -- which drops most
-    # */5 ticks under load and delivers roughly one dispatch an hour.
-    timeout-minutes: 55
+    # Each run polls for ~5h45m rather than exiting immediately, so the cadence
+    # comes from this job rather than from GitHub's scheduler. Measured 26-29 Aug:
+    # eight scheduled dispatches in 66 hours, one per ~8h. At the old 50-minute
+    # budget that left blackouts of 9-11h -- long enough to trip the 8h+1h
+    # dead-man's switch four times. 5h45m fits under the 6h hosted-runner ceiling,
+    # and a dispatch arriving mid-job queues behind it, so the two chain into
+    # continuous cover for as long as the ticks keep coming.
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v7
 
@@ -47,7 +57,7 @@ jobs:
       - name: Watch for openings
         run: |
           set -u
-          deadline=$(( $(date +%s) + 50*60 ))
+          deadline=$(( $(date +%s) + 345*60 ))
           first=1
           while :; do
             # A --test push is a one-off, not something to repeat every 5 min.
@@ -57,10 +67,7 @@ jobs:
             else
               python3 check.py || true
             fi
-            hour=$(date -u +%H)
-            # Stop at the deadline, or on entering the 01:00-07:00 HKT quiet window.
             if [ "$(date +%s)" -ge "$deadline" ]; then break; fi
-            if [ "$hour" -ge 17 ] && [ "$hour" -le 22 ]; then break; fi
             sleep 300
           done
         env:

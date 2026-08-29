@@ -48,20 +48,29 @@ Settings → Secrets and variables → Actions — `TARGET_DATE` and `NTFY_TOPIC
 `TARGET_TIME` and `HEALTHCHECK_URL` optional.
 
 **The 5-minute cadence comes from a loop inside the job, not from the cron.** GitHub
-documents that scheduled runs are dropped under load; measured here, a `*/5` schedule
-delivered one dispatch every 35–47 minutes. So each dispatch polls for ~50 minutes itself,
-and the concurrency group queues overlapping dispatches into continuous coverage.
+documents that scheduled runs are dropped under load, and how badly varies: a `*/5` schedule
+delivered one dispatch every 35–47 minutes while the repo was being pushed to, then one per
+~8 hours once it went quiet. So each dispatch polls for **5h45m** itself — just under the 6h
+hosted-runner ceiling — and the concurrency group queues the next one behind it.
+
+Sizing that budget is the whole game. At 50 minutes it left blackouts of 9–11 hours between
+dispatches, which is longer than the dead-man's switch below tolerates, so the switch reported
+the watcher down four times in three days and it was right every time.
 
 Keep the repo **public**; a private one can't sustain 5-minute polling
 ([why](#when-something-breaks)).
 
-Nothing runs between **01:00 and 07:00 HKT**, when most people are asleep and changes are
-less likely — 216 checks a day instead of 288. Cron works in UTC, so that window is `23,0-16`.
+**It polls round the clock** — 288 checks a day. There used to be a quiet window over
+01:00–07:00 HKT, on the reasoning that nobody cancels an appointment at 4am. It saved a
+quarter of the requests and cost far more than it saved: the running job ended when the window
+began, so coverage could only restart when GitHub sent the next dispatch, and on 27 and 29 Aug
+that took five hours. Nothing was watched until midday. The saving was real and the blind
+morning was worse.
 
 Any always-on machine works too, as a crontab entry:
 
 ```sh
-*/5 7-23,0 * * * cd ~/hkid-bot && /usr/bin/python3 check.py >> watch.log 2>&1
+*/5 * * * * cd ~/hkid-bot && /usr/bin/python3 check.py >> watch.log 2>&1
 ```
 
 ## Settings
@@ -83,7 +92,7 @@ Office codes: `RHK` Wan Chai · `RKO` Cheung Sha Wan · `RTK` Tseung Kwan O ·
 ## How it works
 
 ```
-every 5 min, 07:00-01:00 HKT
+every 5 min, round the clock
       |
       v
   fetch feed  ---- 429/403/503 ----> back off 1h+, make no requests
@@ -184,8 +193,8 @@ stops running entirely     ->  no ping at all           ->  email
 Each layer covers the blind spot of the one above. The last matters most: if the workflow is
 disabled or out of minutes, no code here runs, so only an outside watcher can notice.
 
-**The 8-hour heartbeat** clears the largest legitimate gap — the quiet overnight hours plus
-cron drift — while still reaching you the same day. It fires once per outage, not once per
+**The 8-hour heartbeat** clears the largest legitimate gap — waiting out a back-off, or
+waiting for GitHub to dispatch the next job — while still reaching you the same day. It fires once per outage, not once per
 run. "Succeeded" means usable data, not an HTTP 200: counting a changed schema as success
 would keep resetting the clock, and the heartbeat could never fire.
 
@@ -193,6 +202,12 @@ would keep resetting the clock, and the heartbeat could never fire.
 [healthchecks.io](https://healthchecks.io), set **Period 8 hours, Grace 1 hour**, and add its
 ping URL as a `HEALTHCHECK_URL` secret. Treat it as a password — anyone holding it can fake a
 heartbeat.
+
+Those nine hours have to sit above every gap the design produces on purpose, or the switch
+cries wolf and you stop reading it. With continuous polling the only such gap is the wait for
+the next dispatch after a job ends — a couple of hours at the rates seen so far. It was the
+quiet window, not the dispatch drought, that used to push past nine and made the switch report
+four outages that were really just night-time.
 
 One *unexplained* failure stays silent; only three in a row report. An explicit rejection is
 different — a single 429 is the server speaking clearly, so it backs off and pings `/fail` at
@@ -204,7 +219,7 @@ ignore is worse than none.
 
 | | What happens | Fix |
 |---|---|---|
-| **Actions minutes** | Private repos get 2,000/month. Because each job now polls for ~50 minutes, that allowance is gone in under two days. | Keep the repo public, or drop the loop and the cron to `*/30` |
+| **Actions minutes** | Private repos get 2,000/month. Because each job now polls for 5h45m, that allowance is gone in under a day. | Keep the repo public, or drop the loop and the cron to `*/30` |
 | **Inactivity** | GitHub disables scheduled workflows after 60 days without repo activity. | Any commit resets the clock |
 
 ## Notes
@@ -213,7 +228,8 @@ ignore is worse than none.
 slot that fills and later reopens *will* alert again — that's wanted. If a push fails,
 nothing is recorded, so the next run retries instead of losing the alert.
 
-**Load on the government server.** One request per check, ~58 KB, no browser. The endpoint
+**Load on the government server.** One request per check, ~58 KB, no browser — 288 a day,
+about 17 MB. The endpoint
 sends no `ETag` and publishes no rate limits, so rather than probe for the line the script
 **never retries a rejection**: on `429`, `403` or `503` it sleeps at least an hour, honouring
 `Retry-After`, doubling on repeats, capped at a day.
