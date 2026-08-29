@@ -1,0 +1,21 @@
+name: tests
+
+# The suite is pure: no network, no clock, no disk outside tmp_path. So it runs
+# on every push rather than on a schedule, and a red badge means the logic
+# broke, never that Immigration changed something.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: pip install pytest
+      - run: pytest -q

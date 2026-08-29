@@ -1,5 +1,7 @@
 # HKID slot watcher
 
+[![tests](https://github.com/Jasmineprogrammiert/hkid-bot/actions/workflows/test.yml/badge.svg)](https://github.com/Jasmineprogrammiert/hkid-bot/actions/workflows/test.yml)
+
 Checks HKID appointment availability and alerts your phone when a slot opens on or before
 the date you already booked.
 
@@ -89,6 +91,16 @@ latest                : 08/26/2026 09:47:31
 
 Gaps under two minutes are ignored — the feed sits behind a load balancer whose nodes publish
 a second or two apart, so one publication can surface twice with different timestamps.
+
+**Tests.** `pytest` covers the parts where a mistake is silent rather than
+loud: which cells count as an opening, the jitter filter behind `--stats`, how a
+back-off escalates, and the rollback that stops a failed push being recorded as
+delivered. All pure — no network, no real clock, no state file — so they run on
+every push.
+
+```sh
+pip install pytest && pytest -q
+```
 
 **History.** Alerting asks only what's open now and discards the rest. `history.db` keeps
 what can't be recovered later: when each cell changed. Transitions, not snapshots —
