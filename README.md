@@ -105,8 +105,9 @@ every 5 min, 07:00-01:00 HKT
 `check.py` is the entry point; the parts live in `watcher/` — `config` (settings), `feed`
 (reading and filtering), `alerts` (ntfy), `state` (what carries between runs), `history`
 (recording changes), `monitor` (noticing when the watcher itself is broken). Dependencies
-point one way only: the first three import nothing local, `alerts` uses `feed`, `monitor`
-sits on `alerts` and `state`, and `check.py` wires them together.
+point one way only: `config`, `feed`, `state` and `history` import nothing local, `alerts`
+uses `feed`, `monitor` sits on `alerts`, `feed` and `state`, and `check.py` wires them
+together.
 
 **Freshness.** The feed regenerates every 15 minutes — `refreshTime = 9e5` in the page's own
 script, and measured at a median of 15.0 min. This checks every 5. Every run logs the feed's
@@ -174,10 +175,10 @@ Silence normally means "no slots". Without the layers below it would equally mea
 three weeks ago", and from your phone the two look identical.
 
 ```
-Immigration rejects us     ->  back off quietly, doubling each time
+Immigration rejects us     ->  back off 1h+, doubling   ->  ping /fail  ->  email
+three failures in a row    ->  the same back-off        ->  ping /fail  ->  email
 runs but fails for 8h      ->  push: "HKID watcher may be broken"
-gives up after 3 failures  ->  ping /fail   ->  healthchecks.io emails you
-stops running entirely     ->  no ping      ->  healthchecks.io emails you
+stops running entirely     ->  no ping at all           ->  email
 ```
 
 Each layer covers the blind spot of the one above. The last matters most: if the workflow is
@@ -193,8 +194,11 @@ would keep resetting the clock, and the heartbeat could never fire.
 ping URL as a `HEALTHCHECK_URL` secret. Treat it as a password — anyone holding it can fake a
 heartbeat.
 
-One failed check stays silent; only three in a row report. An alert you learn to ignore is
-worse than none.
+One *unexplained* failure stays silent; only three in a row report. An explicit rejection is
+different — a single 429 is the server speaking clearly, so it backs off and pings `/fail` at
+once. A back-off is deliberate, but it is not healthy: nothing is checked during it, and at
+full escalation that is a 24-hour blind window worth hearing about. An alert you learn to
+ignore is worse than none.
 
 **Two ways the schedule can stop silently:**
 
