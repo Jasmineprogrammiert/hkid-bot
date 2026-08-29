@@ -8,6 +8,95 @@ Booking is still manual — this just tells you when it's worth going to do it.
 
 [preview]: https://eservices.es2.immd.gov.hk/es/quota-enquiry-client/?l=en-US&appId=579
 
+## What this can't do
+
+Two limits, both structural.
+
+**It's day-level.** The feed gives a status per office per day, never individual times — so
+it can't tell you whether an opening on your booked day beats the time you hold.
+
+**It's 15 minutes behind.** That's Immigration's republish interval, not a setting here;
+polling faster returns byte-identical data. So **a slot that opens and is taken inside one
+cycle never appears at all** — the feed shows full before and full after, and no transition
+is ever published. How big that blind spot is depends on how fast freed slots go, which is
+what `--report` measures:
+
+```sh
+python3 check.py --report
+```
+
+It shows when openings appear, by hour and weekday, and how long each survived — including
+how many lasted under 15 minutes and so were never visible here.
+
+The authoritative view lives inside the booking system, which computes availability per
+applicant — so the answer depends on who is asking, can't be shared, and can't be cached.
+That path sits behind a queue gate and client attestation, and this stays out of it
+deliberately: the gate exists to keep automated clients out, and tripping it risks the
+appointment you already hold.
+
+What the department publishes openly instead is a batch-computed summary, identical for every
+visitor and cheap to serve, so casual reads never touch the booking database. The 15 minutes
+is the price of that separation rather than an oversight.
+
+Openings that outlast a cycle are still caught, and the report can point you at the hours
+worth checking by hand — but this won't win a race against someone already inside the
+booking system.
+
+## How it works
+
+```
+every 5 min, round the clock
+      |
+      v
+  fetch feed  ---- 429/403/503 ----> back off 1h+, make no requests
+      |
+      v
+  any day open on or before your booking?
+      |
+      +-- no ---------------------------> stay silent
+      |
+      +-- yes --> already reported? --+-- yes --> stay silent
+                                      |
+                                      +-- no ---> ntfy --> phone
+      |
+      v
+  state.json    reported slots + feed timestamps, read again next run
+  history.db    every change the feed has shown, kept for good
+```
+
+`check.py` is the entry point; the parts live in `watcher/` — `config` (settings), `feed`
+(reading and filtering), `alerts` (ntfy), `state` (what carries between runs), `history`
+(recording changes), `monitor` (noticing when the watcher itself is broken). Dependencies
+point one way only: `config`, `feed`, `state` and `history` import nothing local, `alerts`
+uses `feed`, `monitor` sits on `alerts`, `feed` and `state`, and `check.py` wires them
+together.
+
+**Freshness.** The feed regenerates every 15 minutes — `refreshTime = 9e5` in the page's own
+script, and measured at a median of 15.0 min. This checks every 5. Every run logs the feed's
+own `lastUpdateTime`, so you can re-check that:
+
+```sh
+python3 check.py --stats
+```
+
+```
+observations recorded : 84
+distinct publications : 29
+refresh interval      : median 15.0 min (min 14.9, max 16.0, n=28)
+first seen            : 08/25/2026 10:02:14
+latest                : 08/26/2026 09:47:31
+```
+
+Gaps under two minutes are ignored — the feed sits behind a load balancer whose nodes publish
+a second or two apart, so one publication can surface twice with different timestamps.
+
+**History.** Alerting asks only what's open now and discards the rest. `history.db` keeps
+what can't be recovered later: when each cell changed. Transitions, not snapshots —
+`red → green` a cancellation appearing, `green → red` someone taking it, `→ gone` a date
+leaving the rolling window rather than being booked. Every office is stored, timed by the
+feed's own clock. Failures warn and return zero, so collection can't break the alerting it
+rides on.
+
 ## Setup
 
 **1. Push notifications.** Install [ntfy](https://ntfy.sh) (free, no account) and subscribe
@@ -88,95 +177,6 @@ those come from the environment.
 
 Office codes: `RHK` Wan Chai · `RKO` Cheung Sha Wan · `RTK` Tseung Kwan O ·
 `FTO` Fo Tan · `TMO` Tuen Mun · `YLO` Yuen Long.
-
-## How it works
-
-```
-every 5 min, round the clock
-      |
-      v
-  fetch feed  ---- 429/403/503 ----> back off 1h+, make no requests
-      |
-      v
-  any day open on or before your booking?
-      |
-      +-- no ---------------------------> stay silent
-      |
-      +-- yes --> already reported? --+-- yes --> stay silent
-                                      |
-                                      +-- no ---> ntfy --> phone
-      |
-      v
-  state.json    reported slots + feed timestamps, read again next run
-  history.db    every change the feed has shown, kept for good
-```
-
-`check.py` is the entry point; the parts live in `watcher/` — `config` (settings), `feed`
-(reading and filtering), `alerts` (ntfy), `state` (what carries between runs), `history`
-(recording changes), `monitor` (noticing when the watcher itself is broken). Dependencies
-point one way only: `config`, `feed`, `state` and `history` import nothing local, `alerts`
-uses `feed`, `monitor` sits on `alerts`, `feed` and `state`, and `check.py` wires them
-together.
-
-**Freshness.** The feed regenerates every 15 minutes — `refreshTime = 9e5` in the page's own
-script, and measured at a median of 15.0 min. This checks every 5. Every run logs the feed's
-own `lastUpdateTime`, so you can re-check that:
-
-```sh
-python3 check.py --stats
-```
-
-```
-observations recorded : 84
-distinct publications : 29
-refresh interval      : median 15.0 min (min 14.9, max 16.0, n=28)
-first seen            : 08/25/2026 10:02:14
-latest                : 08/26/2026 09:47:31
-```
-
-Gaps under two minutes are ignored — the feed sits behind a load balancer whose nodes publish
-a second or two apart, so one publication can surface twice with different timestamps.
-
-**History.** Alerting asks only what's open now and discards the rest. `history.db` keeps
-what can't be recovered later: when each cell changed. Transitions, not snapshots —
-`red → green` a cancellation appearing, `green → red` someone taking it, `→ gone` a date
-leaving the rolling window rather than being booked. Every office is stored, timed by the
-feed's own clock. Failures warn and return zero, so collection can't break the alerting it
-rides on.
-
-## What this can't do
-
-Two limits, both structural.
-
-**It's day-level.** The feed gives a status per office per day, never individual times — so
-it can't tell you whether an opening on your booked day beats the time you hold.
-
-**It's 15 minutes behind.** That's Immigration's republish interval, not a setting here;
-polling faster returns byte-identical data. So **a slot that opens and is taken inside one
-cycle never appears at all** — the feed shows full before and full after, and no transition
-is ever published. How big that blind spot is depends on how fast freed slots go, which is
-what `--report` measures:
-
-```sh
-python3 check.py --report
-```
-
-It shows when openings appear, by hour and weekday, and how long each survived — including
-how many lasted under 15 minutes and so were never visible here.
-
-The authoritative view lives inside the booking system, which computes availability per
-applicant — so the answer depends on who is asking, can't be shared, and can't be cached.
-That path sits behind a queue gate and client attestation, and this stays out of it
-deliberately: the gate exists to keep automated clients out, and tripping it risks the
-appointment you already hold.
-
-What the department publishes openly instead is a batch-computed summary, identical for every
-visitor and cheap to serve, so casual reads never touch the booking database. The 15 minutes
-is the price of that separation rather than an oversight.
-
-Openings that outlast a cycle are still caught, and the report can point you at the hours
-worth checking by hand — but this won't win a race against someone already inside the
-booking system.
 
 ## When something breaks
 
