@@ -7,3 +7,4 @@ watch.log
 TODO.md
 WRITEUP.md
 .env
+.pytest_cache/
