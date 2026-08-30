@@ -4,7 +4,7 @@ Two things: which slots have already been reported, and every lastUpdateTime
 the feed has served. The first prevents repeat alerts; the second backs --stats."""
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Written at the repo root, one level above this package.
@@ -15,6 +15,17 @@ STATE = Path(__file__).resolve().parent.parent / "state.json"
 # refreshes. Anything closer together than this is treated as that jitter.
 JITTER_S = 120
 MAX_STAMPS = 200
+
+# The same load balancer that stamps a publication twice can also serve one
+# OLDER than a publication already processed. Read as a fresh grid, that older
+# one looks like every open slot closing at once: it wipes what has been
+# reported, so the next real publication re-alerts on slots already pushed, and
+# it writes a pair of phantom transitions into history that never happened.
+#
+# Bounded on purpose. A stamp far behind the newest is likelier a genuine reset
+# at their end than a stale replica, and refusing those forever would turn one
+# bad reading into a permanently silent watcher.
+REPLAY_WINDOW_S = 3600
 
 
 def now():
@@ -69,14 +80,36 @@ def save_state(state, keys, stamp):
     }))
 
 
+def feed_time(stamp):
+    """The feed's own clock, or None if it is not a stamp we recognise."""
+    try:
+        return datetime.strptime(stamp, "%m/%d/%Y %H:%M:%S")
+    except (ValueError, TypeError):
+        return None
+
+
+def is_replay(stamp, stamps):
+    """True if this publication is older than one already processed.
+
+    Not the same as the jitter case above: that is one publication surfacing
+    twice a second or two apart, which is harmless. This is the feed going
+    backwards, which is not.
+    """
+    current = feed_time(stamp)
+    seen = [t for t in (feed_time(s.get("feed")) for s in stamps) if t]
+    if not current or not seen:
+        return False
+    behind = max(seen) - current
+    return timedelta(0) < behind <= timedelta(seconds=REPLAY_WINDOW_S)
+
+
 def refresh_intervals(stamps):
     """Gaps in minutes between consecutive feed publications, jitter removed."""
     times = []
     for s in stamps:
-        try:
-            times.append(datetime.strptime(s["feed"], "%m/%d/%Y %H:%M:%S"))
-        except (ValueError, KeyError):
-            continue
+        parsed = feed_time(s.get("feed"))
+        if parsed:
+            times.append(parsed)
     gaps = []
     for earlier, later in zip(times, times[1:]):
         delta = (later - earlier).total_seconds()

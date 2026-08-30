@@ -2,8 +2,8 @@
 
 from datetime import datetime, timedelta, timezone
 
-from watcher.state import (JITTER_S, load_state, now, parse, refresh_intervals,
-                           save_state)
+from watcher.state import (JITTER_S, REPLAY_WINDOW_S, is_replay, load_state, now,
+                           parse, refresh_intervals, save_state)
 
 
 def stamps(*feed_times):
@@ -62,3 +62,33 @@ def test_stamps_written_before_the_clock_was_utc_still_parse():
     naive = "2026-08-29T12:00:00"
     assert parse(naive).tzinfo == timezone.utc
     assert (now() - parse(naive)).total_seconds() > 0
+
+
+# --- the feed going backwards -------------------------------------------------
+
+def test_a_publication_older_than_one_already_processed_is_a_replay():
+    """A load-balancer node serving yesterday's grid is not news."""
+    assert is_replay("08/30/2026 09:46:36", stamps("08/30/2026 09:47:27"))
+
+
+def test_the_newest_publication_is_not_a_replay():
+    assert not is_replay("08/30/2026 09:47:27", stamps("08/30/2026 09:46:36"))
+
+
+def test_the_same_publication_again_is_not_a_replay():
+    """Jitter is handled elsewhere; re-reading the current grid is harmless."""
+    assert not is_replay("08/30/2026 09:47:27", stamps("08/30/2026 09:47:27"))
+
+
+def test_a_stamp_far_behind_is_treated_as_a_genuine_reset():
+    """Refusing those forever would turn one bad reading into a silent watcher."""
+    old = datetime(2026, 8, 30, 9, 47, 27) - timedelta(seconds=REPLAY_WINDOW_S + 60)
+    assert not is_replay(f"{old:%m/%d/%Y %H:%M:%S}", stamps("08/30/2026 09:47:27"))
+
+
+def test_nothing_processed_yet_cannot_be_a_replay():
+    assert not is_replay("08/30/2026 09:47:27", [])
+
+
+def test_an_unreadable_stamp_is_not_treated_as_a_replay():
+    assert not is_replay("not a date", stamps("08/30/2026 09:47:27"))

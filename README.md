@@ -92,6 +92,15 @@ latest                : 08/26/2026 09:47:31
 Gaps under two minutes are ignored — the feed sits behind a load balancer whose nodes publish
 a second or two apart, so one publication can surface twice with different timestamps.
 
+The same load balancer will also, occasionally, serve a publication *older* than one already
+processed. That one is skipped outright. Read as a fresh grid it says every open slot closed
+at once, which re-alerts on slots already pushed the moment the real publication comes back,
+and writes a pair of transitions into `history.db` that never happened. Observed on 30 Aug:
+publication 09:46:36 arrived between two reads of 09:47:27, and the phone got the same eleven
+openings twice, ten minutes apart. A stamp far behind the newest is let through, on the
+grounds that it is likelier a genuine reset at their end than a stale node — refusing those
+forever would turn one bad reading into a permanently silent watcher.
+
 **Tests.** `pytest` covers the parts where a mistake is silent rather than
 loud: which cells count as an opening, the jitter filter behind `--stats`, how a
 back-off escalates, and the rollback that stops a failed push being recorded as

@@ -75,3 +75,41 @@ def test_nothing_open_pushes_nothing_and_still_succeeds(run):
 def test_the_feed_stamp_is_recorded_for_stats(run):
     _, saved = run(cells=[("RHK", "10/01/2026", OPEN_FULL)])
     assert saved["stamp"] == "08/29/2026 12:00:00"
+
+
+def test_a_stale_replica_does_not_re_alert(monkeypatch, cfg, make_feed):
+    """The 30 Aug duplicate, reproduced.
+
+    A node served publication 09:46:36 between two reads of 09:47:27. Taken as
+    a fresh grid, the older one wiped what had been reported, so the newer one
+    looked new again and pushed a second identical alert to the phone.
+    """
+    state = {"seen": [], "stamps": [], "cooldown_until": None, "cooldown_len": 0,
+             "fail_streak": 0, "last_success": None, "heartbeat_sent": False}
+    pushes, recorded = [], []
+    feeds = iter([
+        make_feed(("RHK", "10/01/2026", OPEN_FULL), stamp="08/30/2026 09:47:27"),
+        make_feed(stamp="08/30/2026 09:46:36"),          # the stale replica
+        make_feed(("RHK", "10/01/2026", OPEN_FULL), stamp="08/30/2026 09:47:27"),
+    ])
+
+    def remember(st, keys, stamp):
+        st["seen"] = sorted(keys)
+        if stamp and stamp != "?" and (not st["stamps"] or st["stamps"][-1]["feed"] != stamp):
+            st["stamps"].append({"feed": stamp})
+
+    monkeypatch.setattr(check_module.sys, "argv", ["check.py"])
+    monkeypatch.setattr(check_module, "load_config", lambda: cfg)
+    monkeypatch.setattr(check_module, "load_state", lambda: state)
+    monkeypatch.setattr(check_module, "fetch", lambda: next(feeds))
+    monkeypatch.setattr(check_module, "record_history", lambda feed: recorded.append(feed) or 0)
+    monkeypatch.setattr(check_module, "notify", lambda *a, **k: pushes.append(a) or True)
+    monkeypatch.setattr(check_module, "save_state", remember)
+
+    assert check_module.main() == 0      # the opening appears
+    assert check_module.main() == 0      # the replica arrives
+    assert check_module.main() == 0      # the real publication returns
+
+    assert len(pushes) == 1, "the same opening was pushed twice"
+    assert state["seen"] == [REPORTED], "the replica wiped what had been reported"
+    assert len(recorded) == 2, "the replica was recorded as history that never happened"

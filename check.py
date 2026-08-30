@@ -24,7 +24,7 @@ from watcher.monitor import (
     record_failure,
     start_cooldown,
 )
-from watcher.state import load_state, print_stats, save_state
+from watcher.state import is_replay, load_state, print_stats, save_state
 
 
 def read_feed(cfg, state):
@@ -110,8 +110,21 @@ def main():
     mark_success(state)
 
     seen = set(state["seen"])
-    fresh = [h for h in hits if h["key"] not in seen]
     stamp = feed.get("lastUpdateTime", "?")
+
+    if is_replay(stamp, state["stamps"]):
+        # A load-balancer node served a publication older than one already
+        # processed. Taken at face value it reads as every open slot closing at
+        # once, which re-alerts on the next real publication and records a pair
+        # of transitions that never happened. It is a valid read, so it still
+        # counts as success -- it just teaches us nothing.
+        print(f"[skip] feed served {stamp}, older than one already processed "
+              "- stale replica, leaving state and history alone")
+        save_state(state, seen, None)
+        ping_healthcheck(cfg)
+        return 0
+
+    fresh = [h for h in hits if h["key"] not in seen]
     # Store the whole grid, not just what qualifies: the alert path discards
     # everything else, and a change not recorded cannot be recovered later.
     changed = record_history(feed)
