@@ -27,8 +27,16 @@ what `--report` measures:
 python3 check.py --report
 ```
 
-It shows when openings appear, by hour and weekday, and how long each survived — including
-how many lasted under 15 minutes and so were never visible here.
+It shows when openings appear, by hour and weekday, and how long each survived — measured in
+publications, because one cycle is the shortest gap the feed can express. A slot seen open in
+one publication and gone in the next is recorded as lasting one cycle, whatever really
+happened in between.
+
+What the report deliberately does **not** claim is how many openings came and went inside a
+single cycle. Those were never published, so they are not in the data, and no amount of
+arithmetic on what *is* there can estimate them. "Do slots vanish instantly?" is not a
+question a feed this slow can answer — a survival time below one cycle is not a fast booking,
+it is the feed contradicting itself.
 
 The authoritative view lives inside the booking system, which computes availability per
 applicant — so the answer depends on who is asking, can't be shared, and can't be cached.
@@ -110,6 +118,17 @@ every push.
 ```sh
 pip install pytest && pytest -q
 ```
+
+**Backups.** The Actions cache is a working copy, not storage. Every run also uploads the
+whole database as a build artifact, so the newest artifact is a complete dataset rather than a
+delta — retention can age out old artifacts without ever aging out history. A day not
+collected cannot be collected again.
+
+**Pruning.** `python3 check.py --prune` drops transitions a stale replica wrote: a batch whose
+publication is older than one already stored, and any change re-applied at a publication it
+was already recorded at. Both are impossible for real events — a cell changes at most once per
+publication — so nothing genuine is at risk. The scheduled workflow can run it before polling
+via the `prune` input.
 
 **History.** Alerting asks only what's open now and discards the rest. `history.db` keeps
 what can't be recovered later: when each cell changed. Transitions, not snapshots —

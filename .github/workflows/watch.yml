@@ -26,6 +26,10 @@ on:
         description: "Send a test notification even if nothing qualifies"
         type: boolean
         default: false
+      prune:
+        description: "Drop transitions a stale feed replica wrote, before polling"
+        type: boolean
+        default: false
 
 concurrency:
   group: hkid-watch
@@ -54,6 +58,11 @@ jobs:
           key: hkid-state-${{ github.run_id }}
           restore-keys: hkid-state-
 
+      # Housekeeping on the restored database, before anything is added to it.
+      - name: Prune stale-replica transitions
+        if: inputs.prune
+        run: python3 check.py --prune
+
       - name: Watch for openings
         run: |
           set -u
@@ -75,3 +84,16 @@ jobs:
           TARGET_DATE: ${{ secrets.TARGET_DATE }}
           TARGET_TIME: ${{ secrets.TARGET_TIME }}
           HEALTHCHECK_URL: ${{ secrets.HEALTHCHECK_URL }}
+
+      # The cache is the working copy; this is the backup. Every upload carries
+      # the whole database rather than a delta, so the newest artifact is always
+      # a complete dataset and the 90-day retention can never age out history
+      # that later runs still hold. A day not collected cannot be collected again.
+      - name: Back up the collected history
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: history-${{ github.run_id }}
+          path: history.db
+          if-no-files-found: ignore
+          retention-days: 90

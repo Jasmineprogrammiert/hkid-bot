@@ -131,6 +131,11 @@ def record(feed):
 OPEN = ("quota-g", "quota-y")
 FULL_ = "quota-r"
 
+# The feed republishes on this cycle, so one publication is the shortest gap
+# two transitions of the same cell can ever be recorded with. A survival time
+# below it is not a fast booking -- it is the feed contradicting itself.
+CYCLE_MIN = 15
+
 
 def _events(conn):
     """Transitions worth reporting, with the feed's own time parsed."""
@@ -208,6 +213,71 @@ def report():
         spans.sort()
         mid = spans[len(spans) // 2]
         print(f"  median {mid:.0f} min   (min {min(spans):.0f}, max {max(spans):.0f}, n={len(spans)})")
-        print(f"  under 15 min: {sum(1 for s in spans if s < 15)} of {len(spans)}"
-              "  <- these are the ones a 15-minute feed can never show in time")
+        print(f"  resolution is one publication ({CYCLE_MIN} min): a slot seen open in one and")
+        print("  gone in the next is recorded at one cycle, whatever really happened between.")
+        impossible = sum(1 for s in spans if s < CYCLE_MIN)
+        if impossible:
+            print(f"  {impossible} of {len(spans)} came back under a single cycle, which cannot")
+            print("  happen -- that is the feed contradicting itself. Run --prune.")
+
+    print("\nWhat is missing, and cannot be recovered: an opening that appeared and")
+    print("was taken inside one cycle was never published, so it is in none of the")
+    print("above, and this data cannot say how many there were. The question 'do")
+    print("slots vanish instantly' is not answerable from a feed this slow.")
     return True
+
+
+def _condemned(rows):
+    """Ids of transitions a stale replica wrote. Pure, so it can be tested.
+
+    Two rules, both safe because of how the feed works:
+
+    *the stamp went backwards* -- a node served a publication older than one
+    already processed, so its whole batch describes a grid that had already
+    been superseded;
+
+    *the same change twice* -- a cell can only change once per publication, so
+    an identical (cell, from, to, stamp) row is that change re-applied after a
+    replay wiped it, never a second real event.
+
+    Stamps are parsed rather than compared as text: the feed's MM/DD/YYYY sorts
+    correctly inside a year and wrongly across one.
+    """
+    doomed, seen_keys, newest = [], set(), None
+    for row_id, office, day, was, became, stamp in rows:
+        at = None
+        try:
+            at = datetime.strptime(stamp, "%m/%d/%Y %H:%M:%S")
+        except (ValueError, TypeError):
+            continue                     # unreadable: leave it alone
+        if newest and at < newest:
+            doomed.append(row_id)        # published before something already seen
+            continue
+        key = (office, day, was, became, stamp)
+        if key in seen_keys:
+            doomed.append(row_id)        # the same change, re-applied
+            continue
+        seen_keys.add(key)
+        newest = at if newest is None else max(newest, at)
+    return doomed
+
+
+def prune():
+    """Remove transitions a stale replica wrote, and say how many."""
+    if not DB.exists():
+        print("no history yet - nothing to prune")
+        return 0
+    conn = connect()
+    try:
+        with conn:
+            rows = conn.execute(
+                "SELECT id, office_id, slot_date, from_status, to_status, feed_stamp"
+                " FROM transition ORDER BY id").fetchall()
+            doomed = _condemned(rows)
+            conn.executemany("DELETE FROM transition WHERE id = ?",
+                             [(i,) for i in doomed])
+    finally:
+        conn.close()
+    print(f"pruned {len(doomed)} of {len(rows)} transitions "
+          f"({len(rows) - len(doomed)} left) - stale replicas and their re-applications")
+    return len(doomed)

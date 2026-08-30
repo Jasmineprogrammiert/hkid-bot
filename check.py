@@ -14,6 +14,7 @@ from datetime import date
 from watcher.alerts import describe, headline, notify
 from watcher.config import load_config
 from watcher.feed import BackOff, fetch, find_openings
+from watcher.history import prune as history_prune
 from watcher.history import record as record_history
 from watcher.history import report as history_report
 from watcher.monitor import (
@@ -73,6 +74,11 @@ def main():
     # Reporting reads the collected history and makes no network request.
     if "--report" in sys.argv:
         return 0 if history_report() else 1
+
+    # Housekeeping on the collected history; also no network request.
+    if "--prune" in sys.argv:
+        history_prune()
+        return 0
 
     force = "--test" in sys.argv
     cfg = load_config()
