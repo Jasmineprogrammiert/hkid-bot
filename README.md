@@ -154,6 +154,7 @@ a `.env` beside the script — gitignored, so it stays out of the public repo:
 TARGET_DATE=2099-12-31   # the booking you already hold
 TARGET_TIME=09:00        # optional, shown in the alert
 NTFY_TOPIC=your-generated-topic
+OFFICES=RHK,RKO          # optional, narrows config.json's full list
 HEALTHCHECK_URL=         # optional, see "When something breaks"
 ```
 
@@ -174,7 +175,7 @@ only notifies when something actually opens up.
 `.github/workflows/watch.yml` runs the check on GitHub's servers, so your machine doesn't
 need to be on. Add the same values as repository secrets under
 Settings → Secrets and variables → Actions — `TARGET_DATE` and `NTFY_TOPIC` are required,
-`TARGET_TIME` and `HEALTHCHECK_URL` optional.
+`TARGET_TIME`, `OFFICES` and `HEALTHCHECK_URL` optional.
 
 **The 5-minute cadence comes from a loop inside the job, not from the cron.** GitHub
 documents that scheduled runs are dropped under load, and how badly varies: a `*/5` schedule
@@ -209,7 +210,7 @@ those come from the environment.
 
 | Key | Meaning |
 |---|---|
-| `offices` | Which offices to watch |
+| `offices` | Which offices to watch. Ships with all six; narrow it per-person with an `OFFICES` environment variable (`OFFICES=RHK,RKO`) rather than by editing this list, so a clone still watches everything |
 | `include_almost_full` | Also alert on *almost full*, not just *available* |
 | `include_target_day` | Also alert when the booked day itself has quota |
 | `heartbeat_hours` | Warn if no check has succeeded in this many hours (`0` disables) |

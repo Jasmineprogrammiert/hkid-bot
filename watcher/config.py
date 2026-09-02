@@ -8,6 +8,8 @@ import os
 from datetime import date
 from pathlib import Path
 
+from .feed import OFFICE_NAMES
+
 # Data files live at the repo root, one level above this package.
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -29,6 +31,16 @@ def load_dotenv():
         os.environ.setdefault(key.strip(), value.strip().strip("'\""))
 
 
+def parse_offices(raw):
+    """Split an OFFICES override into codes.
+
+    Comma-separated, because a shell variable and a GitHub secret are both
+    single strings. Case and spacing are forgiven; an unknown code is not --
+    validate() rejects that below.
+    """
+    return [code.strip().upper() for code in raw.split(",") if code.strip()]
+
+
 def load_config():
     """Config file holds only non-identifying defaults; anything personal comes
     from the environment, so a public repo never carries your details."""
@@ -41,6 +53,12 @@ def load_config():
                              ("HEALTHCHECK_URL", "healthcheck_url")):
         if os.environ.get(env_key):
             cfg[cfg_key] = os.environ[env_key]
+
+    # Which offices you would actually travel to is a personal preference, so
+    # it overrides from the environment like the identifying values above.
+    # config.json keeps every office, so a fresh clone watches all of them.
+    if os.environ.get("OFFICES"):
+        cfg["offices"] = parse_offices(os.environ["OFFICES"])
 
     if not cfg.get("target_date"):
         raise SystemExit(
@@ -71,6 +89,14 @@ def validate(cfg):
                              f"not a {type(cfg[key]).__name__}.")
     if not cfg["offices"]:
         raise SystemExit("config.json: 'offices' is empty, so nothing can ever match.")
+    # A code that is not in the feed matches nothing, and silence is this
+    # tool's normal state -- so a typo here would look exactly like "no slots"
+    # for as long as you left it. Name it now instead.
+    unknown = [o for o in cfg["offices"] if o not in OFFICE_NAMES]
+    if unknown:
+        raise SystemExit(
+            f"unknown office code(s): {', '.join(unknown)}. "
+            f"Valid codes are {', '.join(sorted(OFFICE_NAMES))}.")
     try:
         date.fromisoformat(cfg["target_date"])
     except (ValueError, TypeError):

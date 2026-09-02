@@ -7,16 +7,7 @@ import time
 import urllib.error
 import urllib.request
 
-from .feed import OPEN_FULL, REFERER
-
-OFFICE_NAMES = {
-    "RHK": "Wan Chai",
-    "RKO": "Cheung Sha Wan",
-    "RTK": "Tseung Kwan O",
-    "FTO": "Fo Tan",
-    "TMO": "Tuen Mun",
-    "YLO": "Yuen Long",
-}
+from .feed import OFFICE_NAMES, OPEN_FULL, REFERER
 
 
 def describe(hits):

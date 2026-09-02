@@ -17,6 +17,16 @@ USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
               "AppleWebKit/537.36 (KHTML, like Gecko) "
               "Chrome/140.0.0.0 Safari/537.36")
 
+# Every office the feed carries, and what to call it in a notification.
+OFFICE_NAMES = {
+    "RHK": "Wan Chai",
+    "RKO": "Cheung Sha Wan",
+    "RTK": "Tseung Kwan O",
+    "FTO": "Fo Tan",
+    "TMO": "Tuen Mun",
+    "YLO": "Yuen Long",
+}
+
 # quotaR values in the feed, best to worst.
 OPEN_FULL = "quota-g"      # green  - quota available
 OPEN_ALMOST = "quota-y"    # amber  - almost full

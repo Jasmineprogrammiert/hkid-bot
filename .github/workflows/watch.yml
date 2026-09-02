@@ -81,6 +81,7 @@ jobs:
           done
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          OFFICES: ${{ secrets.OFFICES }}
           TARGET_DATE: ${{ secrets.TARGET_DATE }}
           TARGET_TIME: ${{ secrets.TARGET_TIME }}
           HEALTHCHECK_URL: ${{ secrets.HEALTHCHECK_URL }}
